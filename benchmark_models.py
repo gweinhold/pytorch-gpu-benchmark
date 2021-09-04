@@ -68,7 +68,6 @@ def train(precision="single"):
     model = models.resnet18(pretrained=False)
     model_name = "resnet18"
 
-    model = getattr(model_type, model_name)(pretrained=False)
     if args.NUM_GPU > 1:
         model = nn.DataParallel(model, device_ids=range(args.NUM_GPU))
     model = getattr(model, precision)()
