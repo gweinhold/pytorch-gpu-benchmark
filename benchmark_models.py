@@ -111,7 +111,10 @@ def inference(precision="float"):
         model = model.to("cuda")
         model.eval()
         durations = []
-        print(f"Benchmarking Inference {precision} precision type {model_name} ")
+        now = datetime.datetime.now()
+        batch_start_time = now.strftime("%Y/%m/%d %H:%M:%S")
+
+        print(f"Benchmarking Inference {precision} precision type {model_name} at {batch_start_time}")
         for step, img in enumerate(rand_loader):
             img = getattr(img, precision)()
             torch.cuda.synchronize()
@@ -121,6 +124,11 @@ def inference(precision="float"):
             end = time.time()
             if step >= args.WARM_UP:
                 durations.append((end - start) * 1000)
+
+        now = datetime.datetime.now()
+        batch_end_time = now.strftime("%Y/%m/%d %H:%M:%S")
+        print(f"Batch inference completed at {batch_end_time}")
+
         print(
             f"{model_name} model average inference time : {sum(durations)/len(durations)}ms"
         )
@@ -192,7 +200,6 @@ if __name__ == "__main__":
         inference_result_df.to_csv(path, index=False)
 
     now = datetime.datetime.now()
-
     end_time = now.strftime("%Y/%m/%d %H:%M:%S")
     print(f"benchmark end : {end_time}")
     with open(os.path.join(folder_name, "system_info.txt"), "a") as f:
