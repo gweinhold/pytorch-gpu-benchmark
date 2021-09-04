@@ -11,32 +11,21 @@ import pandas as pd
 import argparse
 from torch.utils.data import Dataset, DataLoader
 import json
+import numpy as np
 
 torch.backends.cudnn.benchmark = True
 # https://discuss.pytorch.org/t/what-does-torch-backends-cudnn-benchmark-do/5936
 # This flag allows you to enable the inbuilt cudnn auto-tuner to find the best algorithm to use for your hardware.
 # If you check it using the profile tool, the cnn method such as winograd, fft, etc. is used for the first iteration and the best operation is selected for the device.
 
-
-MODEL_LIST = {
-    models.mnasnet: models.mnasnet.__all__[1:],
-    models.resnet: models.resnet.__all__[1:],
-    models.densenet: models.densenet.__all__[1:],
-    models.squeezenet: models.squeezenet.__all__[1:],
-    models.vgg: models.vgg.__all__[1:],
-    models.mobilenet: models.mobilenet.mv2_all[1:],
-    models.mobilenet: models.mobilenet.mv3_all[1:],
-    models.shufflenetv2: models.shufflenetv2.__all__[1:],
-}
-
-precisions = ["float", "half", "double"]
+precisions = ["float"]
 # For post-voltaic architectures, there is a possibility to use tensor-core at half precision.
 # Due to the gradient overflow problem, apex is recommended for practical use.
 device_name = str(torch.cuda.get_device_name(0))
 # Training settings
 parser = argparse.ArgumentParser(description="PyTorch Benchmarking")
 parser.add_argument("--WARM_UP", "-w", type=int, default=5, required=False, help="Num of warm up")
-parser.add_argument("--NUM_TEST", "-n", type=int, default=50, required=False, help="Num of Test")
+parser.add_argument("--NUM_TEST", "-n", type=int, default=1000, required=False, help="Num of Test")
 parser.add_argument(
     "--BATCH_SIZE", "-b", type=int, default=12, required=False, help="Num of batch size"
 )
@@ -70,66 +59,79 @@ rand_loader = DataLoader(
     num_workers=8,
 )
 
-
 def train(precision="single"):
     """use fake image for training speed test"""
     target = torch.LongTensor(args.BATCH_SIZE).random_(args.NUM_CLASSES).cuda()
     criterion = nn.CrossEntropyLoss()
     benchmark = {}
-    for model_type in MODEL_LIST.keys():
-        for model_name in MODEL_LIST[model_type]:
-            model = getattr(model_type, model_name)(pretrained=False)
-            if args.NUM_GPU > 1:
-                model = nn.DataParallel(model, device_ids=range(args.NUM_GPU))
-            model = getattr(model, precision)()
-            model = model.to("cuda")
-            durations = []
-            print(f"Benchmarking Training {precision} precision type {model_name} ")
-            for step, img in enumerate(rand_loader):
-                img = getattr(img, precision)()
-                torch.cuda.synchronize()
-                start = time.time()
-                model.zero_grad()
-                prediction = model(img.to("cuda"))
-                loss = criterion(prediction, target)
-                loss.backward()
-                torch.cuda.synchronize()
-                end = time.time()
-                if step >= args.WARM_UP:
-                    durations.append((end - start) * 1000)
-            print(f"{model_name} model average train time : {sum(durations)/len(durations)}ms")
-            del model
-            benchmark[model_name] = durations
+
+    model = models.resnet18(pretrained=False)
+    model_name = "resnet18"
+
+    model = getattr(model_type, model_name)(pretrained=False)
+    if args.NUM_GPU > 1:
+        model = nn.DataParallel(model, device_ids=range(args.NUM_GPU))
+    model = getattr(model, precision)()
+    model = model.to("cuda")
+    durations = []
+    print(f"Benchmarking Training {precision} precision type {model_name} ")
+    for step, img in enumerate(rand_loader):
+        img = getattr(img, precision)()
+        torch.cuda.synchronize()
+        start = time.time()
+        model.zero_grad()
+        prediction = model(img.to("cuda"))
+        loss = criterion(prediction, target)
+        loss.backward()
+        torch.cuda.synchronize()
+        end = time.time()
+        if step >= args.WARM_UP:
+            durations.append((end - start) * 1000)
+    print(f"{model_name} model average train time : {sum(durations)/len(durations)}ms")
+    latencies = np.array(durations)
+    print('Mean latency (ms): {:.4f}'.format(np.mean(latencies)))
+    print('P50 latency (ms): {:.4f}'.format(np.percentile(latencies, 50)))
+    print('P90 latency (ms): {:.4f}'.format(np.percentile(latencies, 90)))
+    print('P95 latency (ms): {:.4f}'.format(np.percentile(latencies, 95)))
+
+    del model
+    benchmark[model_name] = durations
+
     return benchmark
 
 
 def inference(precision="float"):
     benchmark = {}
     with torch.no_grad():
-        for model_type in MODEL_LIST.keys():
-            for model_name in MODEL_LIST[model_type]:
-                model = getattr(model_type, model_name)(pretrained=False)
-                if args.NUM_GPU > 1:
-                    model = nn.DataParallel(model, device_ids=range(args.NUM_GPU))
-                model = getattr(model, precision)()
-                model = model.to("cuda")
-                model.eval()
-                durations = []
-                print(f"Benchmarking Inference {precision} precision type {model_name} ")
-                for step, img in enumerate(rand_loader):
-                    img = getattr(img, precision)()
-                    torch.cuda.synchronize()
-                    start = time.time()
-                    model(img.to("cuda"))
-                    torch.cuda.synchronize()
-                    end = time.time()
-                    if step >= args.WARM_UP:
-                        durations.append((end - start) * 1000)
-                print(
-                    f"{model_name} model average inference time : {sum(durations)/len(durations)}ms"
-                )
-                del model
-                benchmark[model_name] = durations
+        model = models.resnet18(pretrained=False)
+        model_name = "resnet18"
+
+        if args.NUM_GPU > 1:
+            model = nn.DataParallel(model, device_ids=range(args.NUM_GPU))
+        model = getattr(model, precision)()
+        model = model.to("cuda")
+        model.eval()
+        durations = []
+        print(f"Benchmarking Inference {precision} precision type {model_name} ")
+        for step, img in enumerate(rand_loader):
+            img = getattr(img, precision)()
+            torch.cuda.synchronize()
+            start = time.time()
+            model(img.to("cuda"))
+            torch.cuda.synchronize()
+            end = time.time()
+            if step >= args.WARM_UP:
+                durations.append((end - start) * 1000)
+        print(
+            f"{model_name} model average inference time : {sum(durations)/len(durations)}ms"
+        )
+        latencies = np.array(durations)
+        print('Mean latency (ms): {:.4f}'.format(np.mean(latencies)))
+        print('P50 latency (ms): {:.4f}'.format(np.percentile(latencies, 50)))
+        print('P90 latency (ms): {:.4f}'.format(np.percentile(latencies, 90)))
+        print('P95 latency (ms): {:.4f}'.format(np.percentile(latencies, 95)))
+        del model
+        benchmark[model_name] = durations
     return benchmark
 
 
